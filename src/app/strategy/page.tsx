@@ -25,16 +25,18 @@ export default function StrategyPage() {
       setLoading(true);
       const tickers = await bithumbClient.getAllTickers();
 
-      // 거래대금 상위 20개 코인
+      // 거래대금 기준 정렬 후 상위 50개 표시 (필터 없음)
       const topCoins = tickers
-        .filter(t => t.volumeKrw >= 3000000000) // 30억 이상
-        .slice(0, 20);
+        .sort((a, b) => b.volumeKrw - a.volumeKrw)
+        .slice(0, 50);
+
+      console.log(`Loaded ${topCoins.length} coins for analysis`);
 
       setAnalyses(topCoins.map(ticker => ({
         ticker,
         analysis: {
           score: 0,
-          signal: 'hold',
+          signal: 'hold' as const,
           indicators: {
             rsi: 0,
             macd: 0,
@@ -60,21 +62,33 @@ export default function StrategyPage() {
   }
 
   async function analyzeAll() {
+    if (analyzing) {
+      console.log('Analysis already in progress');
+      return;
+    }
+
     setAnalyzing(true);
+    console.log(`Starting analysis for ${analyses.length} coins...`);
 
     // 순차적으로 분석 (API 제한 고려)
     const updatedAnalyses: CoinAnalysis[] = [];
+    let successCount = 0;
+    let errorCount = 0;
 
-    for (const { ticker } of analyses) {
+    for (let i = 0; i < analyses.length; i++) {
+      const { ticker } = analyses[i];
       try {
-        console.log(`Analyzing ${ticker.symbol}...`);
+        console.log(`[${i + 1}/${analyses.length}] Analyzing ${ticker.symbol}...`);
         const analysis = await analyzeMarket(ticker.symbol);
         updatedAnalyses.push({ ticker, analysis });
+        successCount++;
+        console.log(`✓ ${ticker.symbol}: Score ${analysis.score.toFixed(0)}, Signal ${analysis.signal}`);
 
-        // API 제한 방지 (200ms 대기)
-        await new Promise(resolve => setTimeout(resolve, 200));
-      } catch (error) {
-        console.error(`Failed to analyze ${ticker.symbol}:`, error);
+        // API 제한 방지 (300ms 대기)
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (error: any) {
+        console.error(`✗ Failed to analyze ${ticker.symbol}:`, error.message || error);
+        errorCount++;
         // 에러 시에도 티커 정보는 유지
         updatedAnalyses.push({
           ticker,
@@ -100,6 +114,7 @@ export default function StrategyPage() {
       }
     }
 
+    console.log(`Analysis complete! Success: ${successCount}, Errors: ${errorCount}`);
     setAnalyses(updatedAnalyses.sort((a, b) => b.analysis.score - a.analysis.score));
     setAnalyzing(false);
   }
