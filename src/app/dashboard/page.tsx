@@ -19,13 +19,18 @@ export default function DashboardPage() {
     async function loadCoins() {
       try {
         const tickers = await bithumbClient.getAllTickers();
-        setCoins(tickers);
+        console.log(`Loaded ${tickers.length} coins from Bithumb API`);
+
+        // 거래대금 기준 정렬
+        const sortedTickers = tickers.sort((a, b) => b.volumeKrw - a.volumeKrw);
+        setCoins(sortedTickers);
         setLoading(false);
 
-        // WebSocket 구독
-        const symbols = tickers.slice(0, 30).map(t => t.symbol); // Top 30
+        // WebSocket 구독 - 거래대금 상위 50개
+        const topSymbols = sortedTickers.slice(0, 50).map(t => t.symbol);
+        console.log(`WebSocket subscribing to ${topSymbols.length} coins`);
         bithumbWs.connect();
-        bithumbWs.subscribe(symbols);
+        bithumbWs.subscribe(topSymbols);
       } catch (error) {
         console.error('Failed to load coins:', error);
         setLoading(false);
