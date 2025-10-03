@@ -63,12 +63,19 @@ export default function StrategyPage() {
 
   async function analyzeAll() {
     if (analyzing) {
-      console.log('Analysis already in progress');
+      console.log('⚠️ Analysis already in progress');
+      return;
+    }
+
+    if (analyses.length === 0) {
+      console.log('⚠️ No coins to analyze');
+      alert('분석할 코인이 없습니다. 페이지를 새로고침해주세요.');
       return;
     }
 
     setAnalyzing(true);
-    console.log(`Starting analysis for ${analyses.length} coins...`);
+    console.log(`🚀 Starting analysis for ${analyses.length} coins...`);
+    console.log(`📊 Check this console (F12) for real-time progress`);
 
     // 순차적으로 분석 (API 제한 고려)
     const updatedAnalyses: CoinAnalysis[] = [];
@@ -78,17 +85,26 @@ export default function StrategyPage() {
     for (let i = 0; i < analyses.length; i++) {
       const { ticker } = analyses[i];
       try {
-        console.log(`[${i + 1}/${analyses.length}] Analyzing ${ticker.symbol}...`);
+        console.log(`[${i + 1}/${analyses.length}] 🔍 Analyzing ${ticker.symbol} (${ticker.koreanName})...`);
+
         const analysis = await analyzeMarket(ticker.symbol);
         updatedAnalyses.push({ ticker, analysis });
         successCount++;
-        console.log(`✓ ${ticker.symbol}: Score ${analysis.score.toFixed(0)}, Signal ${analysis.signal}`);
 
-        // API 제한 방지 (300ms 대기)
-        await new Promise(resolve => setTimeout(resolve, 300));
+        const emoji = analysis.signal === 'buy' ? '🟢' : analysis.signal === 'sell' ? '🔴' : '⚪';
+        console.log(`${emoji} ${ticker.symbol}: Score ${analysis.score.toFixed(0)}, Signal ${analysis.signal.toUpperCase()}`);
+
+        // 진행률 표시 (매 10개마다)
+        if ((i + 1) % 10 === 0) {
+          console.log(`📈 Progress: ${i + 1}/${analyses.length} (${((i + 1) / analyses.length * 100).toFixed(0)}%)`);
+        }
+
+        // API 제한 방지 (400ms 대기 - 안정성 우선)
+        await new Promise(resolve => setTimeout(resolve, 400));
       } catch (error: any) {
-        console.error(`✗ Failed to analyze ${ticker.symbol}:`, error.message || error);
+        console.error(`❌ Failed to analyze ${ticker.symbol}:`, error.message || error);
         errorCount++;
+
         // 에러 시에도 티커 정보는 유지
         updatedAnalyses.push({
           ticker,
@@ -111,11 +127,30 @@ export default function StrategyPage() {
             },
           },
         });
+
+        // 에러가 많으면 중단 (연속 5개 실패 시)
+        if (errorCount >= 5 && successCount === 0) {
+          console.error(`⛔ Too many errors at start. Stopping analysis.`);
+          alert('분석 중 오류가 계속 발생합니다. 콘솔(F12)에서 오류를 확인하세요.');
+          break;
+        }
       }
     }
 
-    console.log(`Analysis complete! Success: ${successCount}, Errors: ${errorCount}`);
-    setAnalyses(updatedAnalyses.sort((a, b) => b.analysis.score - a.analysis.score));
+    console.log(`✅ Analysis complete! Success: ${successCount}, Errors: ${errorCount}`);
+    const sorted = updatedAnalyses.sort((a, b) => b.analysis.score - a.analysis.score);
+    setAnalyses(sorted);
+
+    // 상위 5개 요약
+    if (successCount > 0) {
+      console.log(`🏆 Top 5 coins by score:`);
+      sorted.slice(0, 5).forEach((item, idx) => {
+        if (item.analysis.score > 0) {
+          console.log(`  ${idx + 1}. ${item.ticker.symbol}: ${item.analysis.score.toFixed(0)} (${item.analysis.signal.toUpperCase()})`);
+        }
+      });
+    }
+
     setAnalyzing(false);
   }
 
@@ -148,18 +183,24 @@ export default function StrategyPage() {
           <p className="text-gray-400">실시간 기술 지표 기반 매매 시그널</p>
         </div>
 
-        <div className="mb-6">
+        <div className="mb-6 flex items-center gap-4">
           <button
             onClick={analyzeAll}
-            disabled={analyzing}
+            disabled={analyzing || analyses.length === 0}
             className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
-              analyzing
+              analyzing || analyses.length === 0
                 ? 'bg-gray-700 cursor-not-allowed'
                 : 'bg-blue-600 hover:bg-blue-700'
             }`}
           >
-            {analyzing ? '전체 분석 중...' : '전체 코인 분석 시작'}
+            {analyzing ? '전체 분석 중...' : `전체 코인 분석 시작 (${analyses.length}개)`}
           </button>
+          {analyzing && (
+            <div className="flex items-center gap-2">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+              <span className="text-sm text-gray-400">F12 콘솔에서 진행 상황 확인</span>
+            </div>
+          )}
         </div>
 
         {selectedCoin && (

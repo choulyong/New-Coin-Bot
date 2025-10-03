@@ -248,7 +248,10 @@ export class BithumbClient {
         volume: parseFloat(candle[5]),
       }));
 
-      return candles.reverse(); // 오래된 순서로 정렬
+      // 명시적으로 시간 오름차순 정렬 (차트 라이브러리 요구사항)
+      const sorted = candles.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      return sorted;
     } catch (error) {
       console.error(`Failed to fetch candles for ${symbol}:`, error);
       throw error;
