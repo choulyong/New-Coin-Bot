@@ -115,7 +115,11 @@ Market Data Update
     ↓
 Indicator Engine (RSI, MACD 등 계산)
     ↓
-Signal Generator (점수 계산)
+Volatility & Sentiment Engine (ATR, 감성, 이벤트)
+    ↓
+Signal Fusion Pipeline (멀티레이어 점수화)
+    ↓
+Strategy Portfolio Manager (전략 슬롯 배분)
     ↓
 Trading Decision (매수/보유/매도 결정)
     ↓
@@ -157,7 +161,7 @@ DB 저장 (backtest_results 테이블)
 ```typescript
 // schema.ts
 
-import { pgTable, uuid, varchar, timestamp, decimal, boolean, jsonb, bigint, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, decimal, boolean, jsonb, bigint, integer, pgEnum } from 'drizzle-orm/pg-core';
 
 // Enums
 export const tradingModeEnum = pgEnum('trading_mode', ['live', 'simulation']);
@@ -186,10 +190,13 @@ export const tradingConfigs = pgTable('trading_configs', {
   profitTarget: decimal('profit_target', { precision: 5, scale: 2 }).default('8.00').notNull(), // 8%
   enabled: boolean('enabled').default(false).notNull(),
   indicatorWeights: jsonb('indicator_weights').default({
-    rsi: 25,
-    macd: 30,
-    bollinger: 20,
-    volume: 25
+    rsi: 20,
+    macd: 20,
+    bollinger: 15,
+    volume: 15,
+    volatility: 10,
+    sentiment: 10,
+    event: 10
   }).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -201,9 +208,39 @@ export const tradingSignals = pgTable('trading_signals', {
   symbol: varchar('symbol', { length: 20 }).notNull(), // 'BTC', 'ETH' 등
   timestamp: timestamp('timestamp').notNull(),
   score: decimal('score', { precision: 5, scale: 2 }).notNull(), // 0-100
-  indicators: jsonb('indicators').notNull(), // { rsi: 45, macd: {...}, bollinger: {...} }
+  indicators: jsonb('indicators').notNull(), // { rsi: 45, macd: {...}, volatility: {...} }
   signalType: signalTypeEnum('signal_type').notNull(),
+  confidence: decimal('confidence', { precision: 3, scale: 2 }).default('0.00').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Strategy Slots (멀티 전략 구성)
+export const strategySlots = pgTable('strategy_slots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id).notNull(),
+  strategyId: varchar('strategy_id', { length: 50 }).notNull(),
+  type: varchar('type', { length: 20 }).notNull(), // trend | grid | sentiment
+  baseAllocationPct: decimal('base_allocation_pct', { precision: 5, scale: 2 }).default('15.00').notNull(),
+  maxAllocationPct: decimal('max_allocation_pct', { precision: 5, scale: 2 }).default('35.00').notNull(),
+  cooldownMinutes: integer('cooldown_minutes').default(15).notNull(),
+  enabled: boolean('enabled').default(true).notNull(),
+  metadata: jsonb('metadata').default({}).notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Strategy Execution Logs
+export const strategyExecutions = pgTable('strategy_executions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id).notNull(),
+  symbol: varchar('symbol', { length: 20 }).notNull(),
+  strategyId: varchar('strategy_id', { length: 50 }).notNull(),
+  score: decimal('score', { precision: 5, scale: 2 }).notNull(),
+  confidenceOk: boolean('confidence_ok').default(true).notNull(),
+  exit: boolean('exit').default(false).notNull(),
+  pnl: decimal('pnl', { precision: 18, scale: 2 }).default('0').notNull(),
+  metadata: jsonb('metadata').default({}).notNull(),
+  executedAt: timestamp('executed_at').defaultNow(),
 });
 
 // Orders
@@ -772,6 +809,9 @@ interface IndicatorScores {
   macd: number;
   bollinger: number;
   volume: number;
+  volatility: number;
+  sentiment: number;
+  event: number;
 }
 
 interface Weights {
@@ -779,6 +819,9 @@ interface Weights {
   macd: number;
   bollinger: number;
   volume: number;
+  volatility: number;
+  sentiment: number;
+  event: number;
 }
 
 /**
@@ -786,7 +829,15 @@ interface Weights {
  */
 function calculateTotalScore(
   scores: IndicatorScores,
-  weights: Weights = { rsi: 25, macd: 30, bollinger: 20, volume: 25 }
+  weights: Weights = {
+    rsi: 20,
+    macd: 20,
+    bollinger: 15,
+    volume: 15,
+    volatility: 10,
+    sentiment: 10,
+    event: 10
+  }
 ): number {
   const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
 
@@ -794,7 +845,10 @@ function calculateTotalScore(
     (scores.rsi * weights.rsi) +
     (scores.macd * weights.macd) +
     (scores.bollinger * weights.bollinger) +
-    (scores.volume * weights.volume);
+    (scores.volume * weights.volume) +
+    (scores.volatility * weights.volatility) +
+    (scores.sentiment * weights.sentiment) +
+    (scores.event * weights.event);
 
   return weightedSum / totalWeight;
 }
@@ -815,10 +869,16 @@ async function analyzeMarket(symbol: string): Promise<{
   score: number;
   signal: 'buy' | 'hold' | 'sell';
   indicators: IndicatorScores;
+  metadata: {
+    volatility: VolatilitySnapshot;
+    sentiment: SentimentSnapshot;
+    events: EventSignal[];
+  };
 }> {
   // 1. 가격 데이터 가져오기
   const prices = await fetchPrices(symbol, 120); // 120개 캔들
   const volumes = await fetchVolumes(symbol, 20);
+  const orderBook = await fetchOrderBook(symbol);
 
   // 2. 지표 계산
   const rsi = calculateRSI(prices);
@@ -827,20 +887,338 @@ async function analyzeMarket(symbol: string): Promise<{
   const bollinger = calculateBollingerBands(prices);
   const currentPrice = prices[prices.length - 1];
   const avgVolume = calculateAvgVolume(volumes);
+  const volatilitySnapshot = calculateVolatilityMetrics({ prices, volumes, orderBook });
+  const sentimentSnapshot = await fetchSentimentScores(symbol);
+  const eventSignals = await fetchEventSignals(symbol);
 
   // 3. 점수화
   const scores: IndicatorScores = {
     rsi: scoreRSI(rsi),
     macd: scoreMACD(macd, prevMACD),
     bollinger: scoreBollinger(currentPrice, bollinger),
-    volume: scoreVolume(volumes[volumes.length - 1], avgVolume)
+    volume: scoreVolume(volumes[volumes.length - 1], avgVolume),
+    volatility: scoreVolatility(volatilitySnapshot),
+    sentiment: scoreSentiment(sentimentSnapshot),
+    event: scoreEvent(eventSignals)
   };
 
   // 4. 종합 점수 및 시그널
   const totalScore = calculateTotalScore(scores);
   const signal = determineSignal(totalScore);
 
-  return { score: totalScore, signal, indicators: scores };
+  return {
+    score: totalScore,
+    signal,
+    indicators: scores,
+    metadata: {
+      volatility: volatilitySnapshot,
+      sentiment: sentimentSnapshot,
+      events: eventSignals
+    }
+  };
+}
+```
+
+### 5.6 변동성 계층 계산
+
+```typescript
+interface OrderBookSnapshot {
+  bids: Array<{ price: number; quantity: number }>;
+  asks: Array<{ price: number; quantity: number }>;
+}
+
+interface VolatilitySnapshot {
+  atr: number;               // Average True Range
+  rangeRatio: number;        // 24시간 고저 대비 현재 위치 (0 ~ 1)
+  orderBookImbalance: number;// 매수/매도 호가 비율 (0 ~ 1, 0.5 중립)
+  volumeSpike: number;       // 거래량 급증 배율
+}
+
+function calculateVolatilityMetrics(params: {
+  prices: number[];
+  volumes: number[];
+  orderBook: OrderBookSnapshot;
+}): VolatilitySnapshot {
+  const atr = calculateATR(params.prices, 14);
+  const recentHigh = Math.max(...params.prices.slice(-24));
+  const recentLow = Math.min(...params.prices.slice(-24));
+  const current = params.prices[params.prices.length - 1];
+  const rangeRatio = (current - recentLow) / Math.max(recentHigh - recentLow, 1e-8);
+  const orderBookImbalance = computeOrderBookImbalance(params.orderBook);
+  const avgVolume = calculateAvgVolume(params.volumes.slice(-24));
+  const volumeSpike = params.volumes[params.volumes.length - 1] / Math.max(avgVolume, 1e-8);
+
+  return { atr, rangeRatio, orderBookImbalance, volumeSpike };
+}
+
+function computeOrderBookImbalance(orderBook: OrderBookSnapshot): number {
+  const bidVolume = orderBook.bids.reduce((acc, bid) => acc + bid.quantity, 0);
+  const askVolume = orderBook.asks.reduce((acc, ask) => acc + ask.quantity, 0);
+  const total = Math.max(bidVolume + askVolume, 1e-8);
+  return bidVolume / total; // 0 → 매도 우위, 1 → 매수 우위
+}
+
+function scoreVolatility(snapshot: VolatilitySnapshot): number {
+  let score = 50;
+  if (snapshot.atr >= 0.015) score += 10;
+  if (snapshot.rangeRatio >= 0.8) score += 10;
+  if (snapshot.orderBookImbalance >= 0.6) score += 10;
+  if (snapshot.volumeSpike >= 2) score += 10;
+  if (snapshot.orderBookImbalance <= 0.4) score -= 10;
+  if (snapshot.rangeRatio <= 0.2) score -= 10;
+  return Math.max(0, Math.min(score, 100));
+}
+```
+
+### 5.7 감성 계층 계산
+
+```typescript
+interface SentimentSnapshot {
+  aggregateScore: number; // -1 (부정) ~ 1 (긍정)
+  confidence: number;     // 0 ~ 1
+  sources: Array<{
+    source: 'news' | 'community' | 'social';
+    score: number;
+    confidence: number;
+  }>;
+}
+
+async function fetchSentimentScores(symbol: string): Promise<SentimentSnapshot> {
+  return sentimentService.getAggregate(symbol, {
+    language: 'ko',
+    windowMinutes: 60,
+    minConfidence: 0.3,
+  });
+}
+
+function scoreSentiment(snapshot: SentimentSnapshot): number {
+  if (snapshot.confidence < 0.5) return 40; // 확신도 낮으면 보수적
+  const normalized = (snapshot.aggregateScore + 1) / 2; // 0 ~ 1
+  return Math.round(normalized * 100);
+}
+```
+
+### 5.8 이벤트 계층 계산
+
+```typescript
+interface EventSignal {
+  id: string;
+  type: 'macro' | 'exchange' | 'listing' | 'regulation';
+  severity: 'low' | 'medium' | 'high';
+  impact: 'bullish' | 'bearish' | 'neutral';
+  confidence: number; // 0 ~ 1
+  scheduledAt?: Date;
+  detectedAt: Date;
+}
+
+async function fetchEventSignals(symbol: string): Promise<EventSignal[]> {
+  return eventService.getSignals({ symbol, includeGlobal: true, windowHours: 24 });
+}
+
+function scoreEvent(events: EventSignal[]): number {
+  if (events.length === 0) return 60; // 이벤트 없음 = 중립
+
+  const weighted = events.reduce((acc, event) => {
+    const severityWeight = event.severity === 'high' ? 1 : event.severity === 'medium' ? 0.6 : 0.3;
+    const direction = event.impact === 'bullish' ? 1 : event.impact === 'bearish' ? -1 : 0;
+    return acc + direction * severityWeight * event.confidence;
+  }, 0);
+
+  const normalized = (weighted + 1) / 2; // -1 ~ 1 → 0 ~ 1
+  return Math.round(Math.max(0, Math.min(normalized, 1)) * 100);
+}
+```
+
+### 5.9 데이터 확신도 게이트
+
+```typescript
+function computeConfidenceGate(sentiment: SentimentSnapshot, events: EventSignal[]): boolean {
+  const sentimentOk = sentiment.confidence >= 0.5;
+  const hasCriticalBearish = events.some(
+    event => event.impact === 'bearish' && event.severity === 'high' && event.confidence >= 0.7
+  );
+  return sentimentOk && !hasCriticalBearish;
+}
+
+function shouldExecuteTrade(score: number, confidenceOk: boolean): boolean {
+  if (!confidenceOk) return false;
+  return score >= 70;
+}
+```
+
+### 6.3 Strategy Portfolio Manager
+
+```typescript
+interface StrategySlot {
+  strategyId: string;
+  type: 'trend' | 'grid' | 'sentiment';
+  baseAllocationPct: number;
+  maxAllocationPct: number;
+  cooldownMinutes: number;
+  performance: {
+    monthlyReturn: number;
+    maxDrawdown: number;
+    sharpe: number;
+    lastUpdated: Date;
+  };
+  enabled: boolean;
+}
+
+interface StrategyRecommendation {
+  strategyId: string;
+  confidence: number;
+  rationale: string;
+}
+
+interface StrategyCandidate {
+  symbol: string;
+  price: number;
+  analysis: {
+    score: number;
+    signal: 'buy' | 'hold' | 'sell';
+    metadata: {
+      volatility: VolatilitySnapshot;
+      sentiment: SentimentSnapshot;
+      events: EventSignal[];
+    };
+  };
+  confidenceOk: boolean;
+  shouldTrade: boolean;
+  recommended: StrategyRecommendation;
+}
+
+class StrategyPortfolioManager {
+  private slots: StrategySlot[];
+
+  constructor(slots: StrategySlot[]) {
+    this.slots = slots;
+  }
+
+  recommendStrategy(params: {
+    symbol: string;
+    analysis: StrategyCandidate['analysis'];
+    confidenceOk: boolean;
+    volatility: VolatilitySnapshot;
+  }): StrategyRecommendation {
+    const { analysis, volatility, confidenceOk } = params;
+
+    if (!confidenceOk) {
+      return { strategyId: 'sentiment-watch', confidence: 0.3, rationale: '확신도 부족' };
+    }
+
+    if (volatility.atr > 0.02 && volatility.rangeRatio > 0.7) {
+      return { strategyId: 'trend-momentum', confidence: 0.8, rationale: '강한 추세 지속' };
+    }
+
+    if (volatility.orderBookImbalance >= 0.45 && volatility.orderBookImbalance <= 0.55) {
+      return { strategyId: 'grid-balance', confidence: 0.7, rationale: '횡보 구간 감지' };
+    }
+
+    if (analysis.metadata.sentiment.aggregateScore > 0.3) {
+      return { strategyId: 'sentiment-momentum', confidence: 0.75, rationale: '긍정 감성 우세' };
+    }
+
+    return { strategyId: 'base-trend', confidence: 0.6, rationale: '기본 추세 전략' };
+  }
+
+  rankCandidates(candidates: StrategyCandidate[]): StrategyCandidate[] {
+    return candidates
+      .filter(c => c.analysis.signal === 'buy')
+      .sort((a, b) => {
+        const scoreDiff = b.analysis.score - a.analysis.score;
+        if (scoreDiff !== 0) return scoreDiff;
+        return (b.recommended.confidence || 0) - (a.recommended.confidence || 0);
+      });
+  }
+
+  allocateCapital(params: {
+    balance: { krw: number };
+    defaultPercentage: number;
+    strategy: string;
+    score: number;
+    volatility: VolatilitySnapshot;
+  }): number {
+    const slot = this.slots.find(s => s.strategyId === params.strategy);
+    const basePct = slot?.baseAllocationPct ?? params.defaultPercentage;
+    const scoreBoost = (params.score - 70) * 0.2; // 점수 5마다 1% 가산
+    const volatilityClamp = Math.max(0.5, 1 - params.volatility.atr * 10);
+    const rawPct = basePct + scoreBoost;
+    const cappedPct = Math.min(slot?.maxAllocationPct ?? 30, Math.max(rawPct, 0));
+    const finalPct = cappedPct * volatilityClamp;
+    return params.balance.krw * (finalPct / 100);
+  }
+
+  recordExecution(params: {
+    symbol: string;
+    strategy: string;
+    score: number;
+    confidenceOk: boolean;
+    exit?: boolean;
+    pnl?: number;
+  }) {
+    db.insert(strategyExecutions).values({
+      symbol: params.symbol,
+      strategyId: params.strategy,
+      score: params.score,
+      confidenceOk: params.confidenceOk,
+      exit: params.exit ?? false,
+      pnl: params.pnl ?? 0,
+      executedAt: new Date()
+    });
+  }
+}
+```
+
+### 6.4 AI Strategy Copilot
+
+```typescript
+class StrategyCopilot {
+  constructor(private llmClient: LlmClient) {}
+
+  async generatePlaybook(context: {
+    userGoals: { targetReturn: number; maxDrawdown: number };
+    marketSnapshot: any;
+  }): Promise<string> {
+    const prompt = buildStrategyPrompt(context);
+    return this.llmClient.complete({
+      model: 'gpt-5-strategy',
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: STRATEGY_SYSTEM_PROMPT },
+        { role: 'user', content: prompt }
+      ]
+    });
+  }
+
+  logDecision(event: {
+    symbol: string;
+    strategy: string;
+    score: number;
+    confidence: number;
+    metadata: {
+      volatility: VolatilitySnapshot;
+      sentiment: SentimentSnapshot;
+      events: EventSignal[];
+    };
+  }) {
+    analytics.track('ai_decision', {
+      ...event,
+      timestamp: Date.now()
+    });
+  }
+
+  logOutcome(event: {
+    symbol: string;
+    action: 'exit' | 'hold';
+    score: number;
+    profitPct: number;
+    confidenceOk: boolean;
+  }) {
+    analytics.track('ai_outcome', {
+      ...event,
+      timestamp: Date.now()
+    });
+  }
 }
 ```
 
@@ -861,13 +1239,17 @@ class TradingEngine extends EventEmitter {
   private signalGenerator: SignalGenerator;
   private orderExecutor: OrderExecutor;
   private riskManager: RiskManager;
+  private strategyPortfolio: StrategyPortfolioManager;
+  private aiCopilot: StrategyCopilot;
 
   constructor(
     config: TradingConfig,
     marketDataService: MarketDataService,
     signalGenerator: SignalGenerator,
     orderExecutor: OrderExecutor,
-    riskManager: RiskManager
+    riskManager: RiskManager,
+    strategyPortfolio: StrategyPortfolioManager,
+    aiCopilot: StrategyCopilot
   ) {
     super();
     this.config = config;
@@ -875,6 +1257,8 @@ class TradingEngine extends EventEmitter {
     this.signalGenerator = signalGenerator;
     this.orderExecutor = orderExecutor;
     this.riskManager = riskManager;
+    this.strategyPortfolio = strategyPortfolio;
+    this.aiCopilot = aiCopilot;
   }
 
   async start() {
@@ -945,9 +1329,13 @@ class TradingEngine extends EventEmitter {
 
     // 보유 판단 (시그널 점수 체크)
     const analysis = await this.signalGenerator.analyze(position.symbol);
+    const confidenceOk = computeConfidenceGate(
+      analysis.metadata.sentiment,
+      analysis.metadata.events
+    );
 
-    // 강한 매도 시그널 → 손절
-    if (analysis.signal === 'sell' && analysis.score < 30) {
+    // 강한 매도 시그널 또는 확신도 하락 → 손절
+    if ((analysis.signal === 'sell' && analysis.score < 30) || !confidenceOk) {
       await this.executeOrder({
         symbol: position.symbol,
         side: 'sell',
@@ -956,6 +1344,27 @@ class TradingEngine extends EventEmitter {
         reason: `손절 (시그널 점수: ${analysis.score})`
       });
       this.emit('position_closed', { symbol: position.symbol, profit: profitPct });
+      if (!confidenceOk) {
+        this.emit('confidence_exit', {
+          symbol: position.symbol,
+          sentimentConfidence: analysis.metadata.sentiment.confidence
+        });
+      }
+      this.strategyPortfolio.recordExecution({
+        symbol: position.symbol,
+        strategy: 'active-position',
+        score: analysis.score,
+        confidenceOk,
+        exit: true,
+        pnl: profitPct,
+      });
+      this.aiCopilot.logOutcome({
+        symbol: position.symbol,
+        action: 'exit',
+        score: analysis.score,
+        profitPct,
+        confidenceOk,
+      });
     }
 
     // 그 외에는 보유
@@ -974,28 +1383,54 @@ class TradingEngine extends EventEmitter {
       }))
     );
 
-    // 매수 시그널 필터링 및 점수 순 정렬
-    const buySignals = analyses
-      .filter(a => a.analysis.signal === 'buy')
-      .sort((a, b) => b.analysis.score - a.analysis.score);
+    const candidates = analyses.map(item => {
+      const confidenceOk = computeConfidenceGate(
+        item.analysis.metadata.sentiment,
+        item.analysis.metadata.events
+      );
+      const shouldTrade = shouldExecuteTrade(item.analysis.score, confidenceOk);
+      const recommended = this.strategyPortfolio.recommendStrategy({
+        symbol: item.symbol,
+        analysis: item.analysis,
+        confidenceOk,
+        volatility: item.analysis.metadata.volatility,
+      });
+      return {
+        ...item,
+        confidenceOk,
+        shouldTrade,
+        recommended,
+      };
+    });
 
-    if (buySignals.length === 0) {
-      return; // 매수 기회 없음
+    const ranked = this.strategyPortfolio.rankCandidates(candidates);
+    const best = ranked.find(candidate => candidate.shouldTrade && candidate.confidenceOk);
+
+    if (!best) {
+      this.emit('confidence_skip', { reason: '적합한 전략 없음' });
+      return;
     }
 
-    const best = buySignals[0];
-
-    // 시그널 점수가 임계값 이상인지 확인
-    if (best.analysis.score < 70) {
-      return; // 점수 부족
-    }
-
-    // 리스크 체크
+    // 리스크 체크 및 자본 배분
     const balance = await this.getBalance();
-    const investAmount = balance.krw * (this.config.investmentPercentage / 100);
+    const investAmount = this.strategyPortfolio.allocateCapital({
+      balance,
+      defaultPercentage: this.config.investmentPercentage,
+      strategy: best.recommended.strategyId,
+      score: best.analysis.score,
+      volatility: best.analysis.metadata.volatility,
+    });
 
     if (!this.riskManager.canTrade(investAmount)) {
       this.emit('risk_limit', '일일 손실 한도 초과');
+      return;
+    }
+
+    if (!best.shouldTrade) {
+      this.emit('confidence_skip', {
+        symbol: best.symbol,
+        reason: '점수/확신도 기준 미충족'
+      });
       return;
     }
 
@@ -1006,12 +1441,28 @@ class TradingEngine extends EventEmitter {
       side: 'buy',
       type: 'market',
       quantity,
-      reason: `자동 매수 (점수: ${best.analysis.score})`
+      reason: `전략 ${best.recommended.strategyId} / 점수 ${best.analysis.score}`
+    });
+
+    this.strategyPortfolio.recordExecution({
+      symbol: best.symbol,
+      strategy: best.recommended.strategyId,
+      score: best.analysis.score,
+      confidenceOk: best.confidenceOk,
+    });
+
+    this.aiCopilot.logDecision({
+      symbol: best.symbol,
+      strategy: best.recommended.strategyId,
+      score: best.analysis.score,
+      confidence: best.confidenceOk ? best.analysis.metadata.sentiment.confidence : 0,
+      metadata: best.analysis.metadata,
     });
 
     this.emit('position_opened', {
       symbol: best.symbol,
-      score: best.analysis.score
+      score: best.analysis.score,
+      strategy: best.recommended.strategyId,
     });
   }
 
