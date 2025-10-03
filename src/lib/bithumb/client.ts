@@ -126,11 +126,19 @@ export class BithumbClient {
 
       const tickerData = data.data;
 
+      const currentPrice = parseFloat(tickerData.closing_price);
+      const openPrice = parseFloat(tickerData.opening_price);
+
+      // 실제 24시간 변동률 계산
+      const change24h = openPrice > 0
+        ? ((currentPrice - openPrice) / openPrice) * 100
+        : 0;
+
       return {
         symbol,
         koreanName: this.getKoreanName(symbol),
-        price: parseFloat(tickerData.closing_price),
-        change24h: parseFloat(tickerData.fluctate_rate_24H),
+        price: currentPrice,
+        change24h: change24h,
         volume24h: parseFloat(tickerData.units_traded_24H),
         volumeKrw: parseFloat(tickerData.acc_trade_value_24H),
         high24h: parseFloat(tickerData.max_price),
@@ -161,11 +169,19 @@ export class BithumbClient {
         if (symbol === 'date') continue;
 
         const coin = tickerData[symbol];
+        const currentPrice = parseFloat(coin.closing_price);
+        const openPrice = parseFloat(coin.opening_price);
+
+        // 실제 24시간 변동률 계산
+        const change24h = openPrice > 0
+          ? ((currentPrice - openPrice) / openPrice) * 100
+          : 0;
+
         tickers.push({
           symbol,
           koreanName: this.getKoreanName(symbol),
-          price: parseFloat(coin.closing_price),
-          change24h: parseFloat(coin.fluctate_rate_24H),
+          price: currentPrice,
+          change24h: change24h,
           volume24h: parseFloat(coin.units_traded_24H),
           volumeKrw: parseFloat(coin.acc_trade_value_24H),
           high24h: parseFloat(coin.max_price),
