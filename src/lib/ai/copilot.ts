@@ -1,6 +1,12 @@
 import OpenAI from 'openai';
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// 서버 사이드에서만 클라이언트 생성
+function getClient() {
+  if (typeof window !== 'undefined') {
+    throw new Error('OpenAI client can only be used on server side');
+  }
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 export interface StrategyPrompt {
   targetReturn: number; // 월간 목표 수익률 (%)
@@ -53,6 +59,7 @@ OUTPUT FORMAT: JSON with these exact fields:
  */
 export async function generateStrategy(prompt: StrategyPrompt): Promise<StrategyRecommendation> {
   try {
+    const client = getClient();
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -132,6 +139,7 @@ export async function analyzeBacktestResult(params: {
   trades: any[];
 }): Promise<string> {
   try {
+    const client = getClient();
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -180,6 +188,7 @@ export async function generateMarketSummary(params: {
   events: string[];
 }): Promise<string> {
   try {
+    const client = getClient();
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [

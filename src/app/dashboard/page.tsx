@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { bithumbClient, Ticker } from '@/lib/bithumb/client';
 import { bithumbWs, TickerUpdate } from '@/lib/bithumb/websocket';
 import { TradingEngine, Position } from '@/lib/strategy/trading-engine';
+import { TradingChart } from '@/components/TradingChart';
 
 export default function DashboardPage() {
   const [coins, setCoins] = useState<Ticker[]>([]);
@@ -11,6 +12,7 @@ export default function DashboardPage() {
   const [currentPosition, setCurrentPosition] = useState<Position | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'volume' | 'price' | 'change'>('volume');
+  const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
 
   // 초기 코인 데이터 로드
   useEffect(() => {
@@ -138,6 +140,13 @@ export default function DashboardPage() {
           </select>
         </div>
 
+        {/* 선택된 코인 차트 */}
+        {selectedCoin && (
+          <div className="mb-6">
+            <TradingChart symbol={selectedCoin} interval="5m" />
+          </div>
+        )}
+
         {/* 코인 리스트 */}
         <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
           <div className="overflow-x-auto">
@@ -155,9 +164,10 @@ export default function DashboardPage() {
                 {filteredCoins.map((coin, index) => (
                   <tr
                     key={coin.symbol}
-                    className={`border-t border-gray-800 hover:bg-gray-800/50 transition-colors ${
+                    onClick={() => setSelectedCoin(coin.symbol)}
+                    className={`border-t border-gray-800 hover:bg-gray-800/50 transition-colors cursor-pointer ${
                       index % 2 === 0 ? 'bg-gray-900' : 'bg-gray-900/50'
-                    }`}
+                    } ${selectedCoin === coin.symbol ? 'ring-2 ring-blue-500' : ''}`}
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">

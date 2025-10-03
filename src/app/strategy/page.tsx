@@ -62,37 +62,43 @@ export default function StrategyPage() {
   async function analyzeAll() {
     setAnalyzing(true);
 
-    const updatedAnalyses = await Promise.all(
-      analyses.map(async ({ ticker }) => {
-        try {
-          const analysis = await analyzeMarket(ticker.symbol);
-          return { ticker, analysis };
-        } catch (error) {
-          console.error(`Failed to analyze ${ticker.symbol}:`, error);
-          return {
-            ticker,
-            analysis: {
-              score: 0,
-              signal: 'hold' as const,
-              indicators: {
-                rsi: 0,
-                macd: 0,
-                bollinger: 0,
-                volume: 0,
-                volatility: 0,
-                sentiment: 0,
-                event: 0,
-              },
-              metadata: {
-                volatility: { atr: 0, rangeRatio: 0, orderBookImbalance: 0, volumeSpike: 0 },
-                sentiment: { aggregateScore: 0, confidence: 0, sources: [] },
-                events: [],
-              },
+    // 순차적으로 분석 (API 제한 고려)
+    const updatedAnalyses: CoinAnalysis[] = [];
+
+    for (const { ticker } of analyses) {
+      try {
+        console.log(`Analyzing ${ticker.symbol}...`);
+        const analysis = await analyzeMarket(ticker.symbol);
+        updatedAnalyses.push({ ticker, analysis });
+
+        // API 제한 방지 (200ms 대기)
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (error) {
+        console.error(`Failed to analyze ${ticker.symbol}:`, error);
+        // 에러 시에도 티커 정보는 유지
+        updatedAnalyses.push({
+          ticker,
+          analysis: {
+            score: 0,
+            signal: 'hold' as const,
+            indicators: {
+              rsi: 0,
+              macd: 0,
+              bollinger: 0,
+              volume: 0,
+              volatility: 0,
+              sentiment: 0,
+              event: 0,
             },
-          };
-        }
-      })
-    );
+            metadata: {
+              volatility: { atr: 0, rangeRatio: 0, orderBookImbalance: 0, volumeSpike: 0 },
+              sentiment: { aggregateScore: 0, confidence: 0, sources: [] },
+              events: [],
+            },
+          },
+        });
+      }
+    }
 
     setAnalyses(updatedAnalyses.sort((a, b) => b.analysis.score - a.analysis.score));
     setAnalyzing(false);
