@@ -377,7 +377,7 @@ export class BithumbClient {
       ZRX: '제로엑스',
       CRV: '커브',
       YFI: '연파이낸스',
-      1INCH: '원인치',
+      '1INCH': '원인치',
       ANKR: '앵커',
       BAL: '밸런서',
       CVC: '시빅',
