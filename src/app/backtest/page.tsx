@@ -27,10 +27,15 @@ interface Trade {
 }
 
 export default function BacktestPage() {
+  // 최근 한달 기본값 계산
+  const today = new Date();
+  const oneMonthAgo = new Date(today);
+  oneMonthAgo.setDate(today.getDate() - 30);
+
   const [config, setConfig] = useState({
     symbol: 'BTC',
-    startDate: '2024-01-01',
-    endDate: '2024-12-31',
+    startDate: oneMonthAgo.toISOString().split('T')[0],
+    endDate: today.toISOString().split('T')[0],
     initialCapital: 10000000,
     profitTarget: 8,
     stopLoss: -3,

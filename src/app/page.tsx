@@ -54,7 +54,7 @@ export default function HomePage() {
             <p className="text-xl text-gray-300 mb-8">
               멀티레이어 전략 + ChatGPT 기반 실시간 암호화폐 자동매매
             </p>
-            <div className="flex gap-4 justify-center">
+            <div className="flex gap-4 justify-center flex-wrap">
               <Link
                 href="/dashboard"
                 className="px-8 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition-colors"
@@ -66,6 +66,18 @@ export default function HomePage() {
                 className="px-8 py-3 bg-purple-600 hover:bg-purple-700 rounded-lg font-semibold transition-colors"
               >
                 전략 분석
+              </Link>
+              <Link
+                href="/trading"
+                className="px-8 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-colors"
+              >
+                자동매매 제어
+              </Link>
+              <Link
+                href="/backtest"
+                className="px-8 py-3 bg-orange-600 hover:bg-orange-700 rounded-lg font-semibold transition-colors"
+              >
+                백테스트
               </Link>
             </div>
           </div>
