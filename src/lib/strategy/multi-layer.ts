@@ -185,27 +185,28 @@ export function shouldExecuteTrade(score: number, confidenceOk: boolean): boolea
  */
 export async function analyzeMarket(symbol: string): Promise<MarketAnalysis> {
   try {
-    // 1. 가격 데이터 가져오기 (캔들 개수 줄임 120 -> 60)
+    console.log(`[analyzeMarket] 📊 Starting ${symbol}`);
+
+    // 1. 가격 데이터 가져오기
     const candles = await bithumbClient.getCandles(symbol, '5m', 60);
 
     if (!candles || candles.length < 20) {
-      throw new Error(`Insufficient candle data for ${symbol}`);
+      throw new Error(`Insufficient data: ${candles?.length || 0} candles`);
     }
+
+    console.log(`[analyzeMarket] ✓ Got ${candles.length} candles for ${symbol}`);
 
     const prices = candles.map(c => c.close);
     const volumes = candles.map(c => c.volume);
+    const currentPrice = prices[prices.length - 1];
 
-    // 2. 호가창 데이터 (에러 발생 시 대체 데이터 사용)
-    let orderBook;
-    try {
-      orderBook = await bithumbClient.getOrderBook(symbol);
-    } catch (error) {
-      console.warn(`OrderBook fetch failed for ${symbol}, using fallback`);
-      orderBook = {
-        bids: [{ price: prices[prices.length - 1], quantity: 1 }],
-        asks: [{ price: prices[prices.length - 1], quantity: 1 }],
-      };
-    }
+    // 2. 호가창 데이터 (간단한 fallback - API 호출 제거)
+    const orderBook = {
+      bids: [{ price: currentPrice * 0.999, quantity: 1 }],
+      asks: [{ price: currentPrice * 1.001, quantity: 1 }],
+    };
+
+    console.log(`[analyzeMarket] ✓ Using fallback orderbook for ${symbol}`);
 
     // 3. 기술 지표 계산
     const rsi = calculateRSI(prices);

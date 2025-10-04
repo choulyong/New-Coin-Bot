@@ -28,7 +28,7 @@ export function TradingChart({ symbol, interval: initialInterval = '5m' }: Tradi
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
-      height: 400,
+      height: 500,
       layout: {
         background: { color: '#0f172a' },
         textColor: '#94a3b8',
@@ -46,14 +46,13 @@ export function TradingChart({ symbol, interval: initialInterval = '5m' }: Tradi
       rightPriceScale: {
         borderColor: '#334155',
         scaleMargins: {
-          top: 0.1,
-          bottom: 0.1,
+          top: 0.05,
+          bottom: 0.3,
         },
       },
       crosshair: {
-        mode: 0, // Normal (0 = 빠름)
+        mode: 0,
       },
-      // 성능 최적화 옵션
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
@@ -80,13 +79,20 @@ export function TradingChart({ symbol, interval: initialInterval = '5m' }: Tradi
 
     candlestickSeriesRef.current = candlestickSeries;
 
-    // 거래량 차트 추가 (서브차트)
+    // 거래량 차트 (아래 30% 영역에 표시)
     const volumeSeries = chart.addHistogramSeries({
       color: '#26a69a',
       priceFormat: {
         type: 'volume',
       },
-      priceScaleId: '', // 별도 스케일
+      priceScaleId: 'volume',
+    });
+
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.7,
+        bottom: 0.05,
+      },
     });
 
     volumeSeriesRef.current = volumeSeries;
