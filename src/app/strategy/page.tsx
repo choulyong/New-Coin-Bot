@@ -15,6 +15,7 @@ export default function StrategyPage() {
   const [loading, setLoading] = useState(true);
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<string>('');
 
   useEffect(() => {
     loadTopCoins();
@@ -64,16 +65,19 @@ export default function StrategyPage() {
   async function analyzeAll() {
     if (analyzing) {
       console.log('⚠️ Analysis already in progress');
+      setDebugInfo('이미 분석 진행 중입니다');
       return;
     }
 
     if (analyses.length === 0) {
       console.log('⚠️ No coins to analyze');
+      setDebugInfo('분석할 코인이 없습니다. 페이지를 새로고침해주세요.');
       alert('분석할 코인이 없습니다. 페이지를 새로고침해주세요.');
       return;
     }
 
     setAnalyzing(true);
+    setDebugInfo(`🚀 ${analyses.length}개 코인 분석 시작...`);
     console.log(`🚀 Starting analysis for ${analyses.length} coins...`);
     console.log(`📊 Check this console (F12) for real-time progress`);
 
@@ -85,6 +89,7 @@ export default function StrategyPage() {
     for (let i = 0; i < analyses.length; i++) {
       const { ticker } = analyses[i];
       try {
+        setDebugInfo(`[${i + 1}/${analyses.length}] 🔍 ${ticker.symbol} 분석 중...`);
         console.log(`[${i + 1}/${analyses.length}] 🔍 Analyzing ${ticker.symbol} (${ticker.koreanName})...`);
 
         const analysis = await analyzeMarket(ticker.symbol);
@@ -93,6 +98,7 @@ export default function StrategyPage() {
 
         const emoji = analysis.signal === 'buy' ? '🟢' : analysis.signal === 'sell' ? '🔴' : '⚪';
         console.log(`${emoji} ${ticker.symbol}: Score ${analysis.score.toFixed(0)}, Signal ${analysis.signal.toUpperCase()}`);
+        setDebugInfo(`${emoji} ${ticker.symbol}: 점수 ${analysis.score.toFixed(0)} (${i + 1}/${analyses.length})`);
 
         // 진행률 표시 (매 10개마다)
         if ((i + 1) % 10 === 0) {
@@ -103,6 +109,7 @@ export default function StrategyPage() {
         await new Promise(resolve => setTimeout(resolve, 400));
       } catch (error: any) {
         console.error(`❌ Failed to analyze ${ticker.symbol}:`, error.message || error);
+        setDebugInfo(`❌ ${ticker.symbol} 분석 실패: ${error.message}`);
         errorCount++;
 
         // 에러 시에도 티커 정보는 유지
@@ -138,6 +145,8 @@ export default function StrategyPage() {
     }
 
     console.log(`✅ Analysis complete! Success: ${successCount}, Errors: ${errorCount}`);
+    setDebugInfo(`✅ 분석 완료! 성공: ${successCount}, 실패: ${errorCount}`);
+
     const sorted = updatedAnalyses.sort((a, b) => b.analysis.score - a.analysis.score);
     setAnalyses(sorted);
 
@@ -151,7 +160,10 @@ export default function StrategyPage() {
       });
     }
 
-    setAnalyzing(false);
+    setTimeout(() => {
+      setAnalyzing(false);
+      setDebugInfo('');
+    }, 3000);
   }
 
   const getSignalColor = (signal: string) => {
@@ -159,6 +171,24 @@ export default function StrategyPage() {
     if (signal === 'sell') return 'text-red-500';
     return 'text-gray-400';
   };
+
+  // 단일 코인 테스트 (디버깅용)
+  async function testSingleCoin() {
+    if (analyses.length === 0) return;
+
+    const testCoin = analyses[0].ticker;
+    setDebugInfo(`🧪 ${testCoin.symbol} 단독 테스트 중...`);
+    console.log(`🧪 Testing ${testCoin.symbol}...`);
+
+    try {
+      const analysis = await analyzeMarket(testCoin.symbol);
+      console.log('✅ Test SUCCESS:', analysis);
+      setDebugInfo(`✅ 테스트 성공! ${testCoin.symbol} 점수: ${analysis.score.toFixed(0)}`);
+    } catch (error: any) {
+      console.error('❌ Test FAILED:', error);
+      setDebugInfo(`❌ 테스트 실패: ${error.message || error}`);
+    }
+  }
 
   const getScoreColor = (score: number) => {
     if (score >= 70) return 'bg-green-500';
@@ -183,22 +213,42 @@ export default function StrategyPage() {
           <p className="text-gray-400">실시간 기술 지표 기반 매매 시그널</p>
         </div>
 
-        <div className="mb-6 flex items-center gap-4">
-          <button
-            onClick={analyzeAll}
-            disabled={analyzing || analyses.length === 0}
-            className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
-              analyzing || analyses.length === 0
-                ? 'bg-gray-700 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700'
-            }`}
-          >
-            {analyzing ? '전체 분석 중...' : `전체 코인 분석 시작 (${analyses.length}개)`}
-          </button>
-          {analyzing && (
-            <div className="flex items-center gap-2">
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
-              <span className="text-sm text-gray-400">F12 콘솔에서 진행 상황 확인</span>
+        <div className="mb-6">
+          <div className="flex items-center gap-4 mb-3">
+            <button
+              onClick={analyzeAll}
+              disabled={analyzing || analyses.length === 0}
+              className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+                analyzing || analyses.length === 0
+                  ? 'bg-gray-700 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+            >
+              {analyzing ? '전체 분석 중...' : `전체 코인 분석 시작 (${analyses.length}개)`}
+            </button>
+
+            <button
+              onClick={testSingleCoin}
+              disabled={analyzing || analyses.length === 0}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                analyzing || analyses.length === 0
+                  ? 'bg-gray-700 cursor-not-allowed'
+                  : 'bg-orange-600 hover:bg-orange-700'
+              }`}
+            >
+              🧪 단일 테스트
+            </button>
+
+            {analyzing && (
+              <div className="flex items-center gap-2">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+                <span className="text-sm text-gray-400">F12 콘솔에서 진행 상황 확인</span>
+              </div>
+            )}
+          </div>
+          {debugInfo && (
+            <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg px-4 py-3">
+              <p className="text-blue-400 font-mono text-sm">{debugInfo}</p>
             </div>
           )}
         </div>
