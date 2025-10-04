@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts';
 import { bithumbClient } from '@/lib/bithumb/client';
 
@@ -13,16 +13,17 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // 차트 초기화 (한 번만 실행)
   useEffect(() => {
     if (!chartContainerRef.current) return;
+    if (chartRef.current) return; // 이미 생성되었으면 스킵
 
-    setLoading(true);
-    setError(null);
+    console.log('🎨 Creating chart instance (once)');
 
-    // 차트 생성
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: 400,
@@ -46,7 +47,6 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
 
     chartRef.current = chart;
 
-    // 캔들스틱 시리즈 생성
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#10b981',
       downColor: '#ef4444',
@@ -58,58 +58,70 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
 
     candlestickSeriesRef.current = candlestickSeries;
 
-    // 데이터 로드
-    async function loadChartData() {
-      try {
-        console.log(`Loading chart for ${symbol} (${interval})...`);
-        const startTime = Date.now();
-
-        const candles = await bithumbClient.getCandles(symbol, interval, 100); // 200 -> 100으로 줄여서 빠르게
-
-        if (!candles || candles.length === 0) {
-          throw new Error('No candle data available');
-        }
-
-        const data: CandlestickData[] = candles.map(candle => ({
-          time: Math.floor(candle.timestamp.getTime() / 1000) as any,
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-        }));
-
-        candlestickSeries.setData(data);
-        chart.timeScale().fitContent();
-
-        const loadTime = Date.now() - startTime;
-        console.log(`✓ Chart loaded in ${loadTime}ms (${candles.length} candles)`);
-
-        setLoading(false);
-      } catch (error: any) {
-        console.error('Failed to load chart data:', error);
-        setError(error.message || '차트 로딩 실패');
-        setLoading(false);
+    // ResizeObserver로 리사이즈 처리 (성능 최적화)
+    resizeObserverRef.current = new ResizeObserver((entries) => {
+      if (chartRef.current && entries.length > 0) {
+        const { width } = entries[0].contentRect;
+        chartRef.current.applyOptions({ width: Math.floor(width) });
       }
-    }
+    });
 
-    loadChartData();
-
-    // 리사이즈 핸들러
-    const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        });
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
+    resizeObserverRef.current.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      chart.remove();
+      console.log('🧹 Cleaning up chart');
+      resizeObserverRef.current?.disconnect();
+      chartRef.current?.remove();
+      chartRef.current = null;
+      candlestickSeriesRef.current = null;
     };
+  }, []); // 빈 배열 - 한 번만 실행
+
+  // 데이터 로드 (symbol/interval 변경 시에만)
+  const loadChartData = useCallback(async () => {
+    if (!candlestickSeriesRef.current) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      console.log(`📊 Loading chart data: ${symbol} (${interval})`);
+      const startTime = Date.now();
+
+      const candles = await bithumbClient.getCandles(symbol, interval, 50); // 50개로 줄여서 빠르게
+
+      if (!candles || candles.length === 0) {
+        throw new Error('캔들 데이터 없음');
+      }
+
+      const data: CandlestickData[] = candles.map(candle => ({
+        time: Math.floor(candle.timestamp.getTime() / 1000) as any,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      }));
+
+      candlestickSeriesRef.current.setData(data);
+      chartRef.current?.timeScale().fitContent();
+
+      const loadTime = Date.now() - startTime;
+      console.log(`✓ Chart data loaded in ${loadTime}ms (${candles.length} candles)`);
+
+      setLoading(false);
+    } catch (error: any) {
+      console.error('❌ Chart data load failed:', error);
+      setError(error.message || '차트 로딩 실패');
+      setLoading(false);
+    }
   }, [symbol, interval]);
+
+  // 데이터 로드 트리거
+  useEffect(() => {
+    if (chartRef.current && candlestickSeriesRef.current) {
+      loadChartData();
+    }
+  }, [loadChartData]);
 
   return (
     <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
@@ -121,7 +133,7 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
       </div>
 
       {loading && (
-        <div className="flex items-center justify-center h-[400px]">
+        <div className="flex items-center justify-center h-[400px] bg-gray-800/50 rounded">
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-2"></div>
             <p className="text-gray-400">차트 로딩 중...</p>
@@ -130,15 +142,24 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
       )}
 
       {error && (
-        <div className="flex items-center justify-center h-[400px]">
+        <div className="flex items-center justify-center h-[400px] bg-gray-800/50 rounded">
           <div className="text-center">
             <p className="text-red-500 mb-2">⚠️ {error}</p>
-            <p className="text-gray-500 text-sm">콘솔(F12)에서 상세 오류를 확인하세요</p>
+            <button
+              onClick={loadChartData}
+              className="mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm transition-colors"
+            >
+              다시 시도
+            </button>
           </div>
         </div>
       )}
 
-      <div ref={chartContainerRef} className={loading || error ? 'hidden' : ''} />
+      <div
+        ref={chartContainerRef}
+        className={loading || error ? 'hidden' : ''}
+        style={{ position: 'relative' }}
+      />
     </div>
   );
 }
