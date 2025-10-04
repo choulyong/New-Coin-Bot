@@ -184,52 +184,73 @@ export function shouldExecuteTrade(score: number, confidenceOk: boolean): boolea
  * 시장 분석 (전체 파이프라인)
  */
 export async function analyzeMarket(symbol: string): Promise<MarketAnalysis> {
-  // 1. 가격 데이터 가져오기
-  const candles = await bithumbClient.getCandles(symbol, '1m', 120);
-  const prices = candles.map(c => c.close);
-  const volumes = candles.map(c => c.volume);
-  const orderBook = await bithumbClient.getOrderBook(symbol);
+  try {
+    // 1. 가격 데이터 가져오기 (캔들 개수 줄임 120 -> 60)
+    const candles = await bithumbClient.getCandles(symbol, '5m', 60);
 
-  // 2. 기술 지표 계산
-  const rsi = calculateRSI(prices);
-  const macd = calculateMACD(prices);
-  const prevMACD = calculateMACD(prices.slice(0, -1));
-  const bollinger = calculateBollingerBands(prices);
-  const currentPrice = prices[prices.length - 1];
-  const avgVolume = calculateAvgVolume(volumes);
-  const volatilitySnapshot = calculateVolatilityMetrics({ prices, volumes, orderBook });
+    if (!candles || candles.length < 20) {
+      throw new Error(`Insufficient candle data for ${symbol}`);
+    }
 
-  // 3. 감성/이벤트 데이터 (임시 데이터, 실제로는 외부 서비스에서 가져옴)
-  const sentimentSnapshot: SentimentSnapshot = {
-    aggregateScore: 0,
-    confidence: 0.6,
-    sources: [],
-  };
-  const eventSignals: EventSignal[] = [];
+    const prices = candles.map(c => c.close);
+    const volumes = candles.map(c => c.volume);
 
-  // 4. 점수화
-  const scores: IndicatorScores = {
-    rsi: scoreRSI(rsi),
-    macd: scoreMACD(macd, prevMACD),
-    bollinger: scoreBollinger(currentPrice, bollinger),
-    volume: scoreVolume(volumes[volumes.length - 1], avgVolume),
-    volatility: scoreVolatility(volatilitySnapshot),
-    sentiment: scoreSentiment(sentimentSnapshot),
-    event: scoreEvent(eventSignals),
-  };
+    // 2. 호가창 데이터 (에러 발생 시 대체 데이터 사용)
+    let orderBook;
+    try {
+      orderBook = await bithumbClient.getOrderBook(symbol);
+    } catch (error) {
+      console.warn(`OrderBook fetch failed for ${symbol}, using fallback`);
+      orderBook = {
+        bids: [{ price: prices[prices.length - 1], quantity: 1 }],
+        asks: [{ price: prices[prices.length - 1], quantity: 1 }],
+      };
+    }
 
-  // 5. 종합 점수 및 시그널
-  const totalScore = calculateTotalScore(scores);
-  const signal = determineSignal(totalScore);
+    // 3. 기술 지표 계산
+    const rsi = calculateRSI(prices);
+    const macd = calculateMACD(prices);
+    const prevMACD = calculateMACD(prices.slice(0, -1));
+    const bollinger = calculateBollingerBands(prices);
+    const currentPrice = prices[prices.length - 1];
+    const avgVolume = calculateAvgVolume(volumes);
+    const volatilitySnapshot = calculateVolatilityMetrics({ prices, volumes, orderBook });
 
-  return {
-    score: totalScore,
-    signal,
-    indicators: scores,
-    metadata: {
-      volatility: volatilitySnapshot,
-      sentiment: sentimentSnapshot,
-      events: eventSignals,
-    },
-  };
+    // 4. 감성/이벤트 데이터 (임시)
+    const sentimentSnapshot: SentimentSnapshot = {
+      aggregateScore: 0,
+      confidence: 0.6,
+      sources: [],
+    };
+    const eventSignals: EventSignal[] = [];
+
+    // 5. 점수화
+    const scores: IndicatorScores = {
+      rsi: scoreRSI(rsi),
+      macd: scoreMACD(macd, prevMACD),
+      bollinger: scoreBollinger(currentPrice, bollinger),
+      volume: scoreVolume(volumes[volumes.length - 1], avgVolume),
+      volatility: scoreVolatility(volatilitySnapshot),
+      sentiment: scoreSentiment(sentimentSnapshot),
+      event: scoreEvent(eventSignals),
+    };
+
+    // 6. 종합 점수 및 시그널
+    const totalScore = calculateTotalScore(scores);
+    const signal = determineSignal(totalScore);
+
+    return {
+      score: totalScore,
+      signal,
+      indicators: scores,
+      metadata: {
+        volatility: volatilitySnapshot,
+        sentiment: sentimentSnapshot,
+        events: eventSignals,
+      },
+    };
+  } catch (error: any) {
+    console.error(`[analyzeMarket] Failed for ${symbol}:`, error);
+    throw new Error(`Analysis failed for ${symbol}: ${error.message || 'Unknown error'}`);
+  }
 }

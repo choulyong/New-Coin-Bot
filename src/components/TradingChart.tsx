@@ -39,9 +39,29 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
         borderColor: '#334155',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 5,
       },
       rightPriceScale: {
         borderColor: '#334155',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.1,
+        },
+      },
+      crosshair: {
+        mode: 0, // Normal (0 = 빠름)
+      },
+      // 성능 최적화 옵션
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
       },
     });
 
@@ -88,7 +108,7 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
       console.log(`📊 Loading chart data: ${symbol} (${interval})`);
       const startTime = Date.now();
 
-      const candles = await bithumbClient.getCandles(symbol, interval, 50); // 50개로 줄여서 빠르게
+      const candles = await bithumbClient.getCandles(symbol, interval, 30); // 30개로 더 줄임
 
       if (!candles || candles.length === 0) {
         throw new Error('캔들 데이터 없음');
