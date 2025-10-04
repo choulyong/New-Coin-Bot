@@ -9,13 +9,15 @@ interface TradingChartProps {
   interval?: '1m' | '5m' | '15m' | '1h';
 }
 
-export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
+export function TradingChart({ symbol, interval: initialInterval = '5m' }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [interval, setInterval] = useState<'1m' | '5m' | '15m' | '1h'>(initialInterval);
 
   // 차트 초기화 (한 번만 실행)
   useEffect(() => {
@@ -78,6 +80,17 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
 
     candlestickSeriesRef.current = candlestickSeries;
 
+    // 거래량 차트 추가 (서브차트)
+    const volumeSeries = chart.addHistogramSeries({
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: '', // 별도 스케일
+    });
+
+    volumeSeriesRef.current = volumeSeries;
+
     // ResizeObserver로 리사이즈 처리 (성능 최적화)
     resizeObserverRef.current = new ResizeObserver((entries) => {
       if (chartRef.current && entries.length > 0) {
@@ -99,7 +112,7 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
 
   // 데이터 로드 (symbol/interval 변경 시에만)
   const loadChartData = useCallback(async () => {
-    if (!candlestickSeriesRef.current) return;
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current) return;
 
     try {
       setLoading(true);
@@ -108,13 +121,13 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
       console.log(`📊 Loading chart data: ${symbol} (${interval})`);
       const startTime = Date.now();
 
-      const candles = await bithumbClient.getCandles(symbol, interval, 30); // 30개로 더 줄임
+      const candles = await bithumbClient.getCandles(symbol, interval, 50);
 
       if (!candles || candles.length === 0) {
         throw new Error('캔들 데이터 없음');
       }
 
-      const data: CandlestickData[] = candles.map(candle => ({
+      const candleData: CandlestickData[] = candles.map(candle => ({
         time: Math.floor(candle.timestamp.getTime() / 1000) as any,
         open: candle.open,
         high: candle.high,
@@ -122,7 +135,14 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
         close: candle.close,
       }));
 
-      candlestickSeriesRef.current.setData(data);
+      const volumeData = candles.map(candle => ({
+        time: Math.floor(candle.timestamp.getTime() / 1000) as any,
+        value: candle.volume,
+        color: candle.close >= candle.open ? '#10b981' : '#ef4444',
+      }));
+
+      candlestickSeriesRef.current.setData(candleData);
+      volumeSeriesRef.current.setData(volumeData);
       chartRef.current?.timeScale().fitContent();
 
       const loadTime = Date.now() - startTime;
@@ -145,11 +165,30 @@ export function TradingChart({ symbol, interval = '1m' }: TradingChartProps) {
 
   return (
     <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-      <div className="mb-3 flex justify-between items-center">
-        <h3 className="text-lg font-semibold">{symbol} 차트 ({interval})</h3>
-        {!loading && !error && (
-          <span className="text-xs text-green-500">✓ 로딩 완료</span>
-        )}
+      <div className="mb-3">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-lg font-semibold">{symbol} 차트</h3>
+          {!loading && !error && (
+            <span className="text-xs text-green-500">✓ 로딩 완료</span>
+          )}
+        </div>
+
+        {/* 시간대 선택 */}
+        <div className="flex gap-2">
+          {(['1m', '5m', '15m', '1h'] as const).map((timeframe) => (
+            <button
+              key={timeframe}
+              onClick={() => setInterval(timeframe)}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                interval === timeframe
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+              }`}
+            >
+              {timeframe}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading && (
